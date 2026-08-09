@@ -176,3 +176,37 @@ def fix_unrealistic_values(df: DataFrame) -> DataFrame:
         )
 
     return df
+
+
+def remove_bad_rows(df: DataFrame) -> DataFrame:
+    """
+    Actually drop duplicate movie IDs and rows with an unknown id/title,
+    rather than just reporting their counts.
+    """
+    before = df.count()
+    df = df.dropDuplicates(subset=["id"])
+    df = df.dropna(subset=["id", "title"])
+    after = df.count()
+    logger.info("Removed %d bad rows (duplicates / missing id or title)", before - after)
+    return df
+
+
+def filter_sparse_rows(df: DataFrame, min_non_null: int = 10) -> DataFrame:
+    """
+    Keep only rows where at least `min_non_null` columns are non-null.
+
+    Spark has no row-wise equivalent of pandas' df.notnull().sum(axis=1),
+    since Spark operations work column-by-column across all rows, never
+    "across" a single row. Instead, we build the per-row non-null count
+    by summing, column by column, a 1-or-0 flag for each column.
+    """
+    before = df.count()
+
+    non_null_count = sum(
+        F.when(F.col(c).isNotNull(), 1).otherwise(0) for c in df.columns
+    )
+    df = df.filter(non_null_count >= min_non_null)
+
+    after = df.count()
+    logger.info("Dropped %d sparse rows (fewer than %d non-null columns)", before - after, min_non_null)
+    return df
