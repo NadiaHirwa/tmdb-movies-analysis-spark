@@ -124,3 +124,55 @@ def extract_credits_columns(df: DataFrame) -> DataFrame:
     df = df.drop("credits")
     logger.info("Extracted cast, cast_size, director, crew_size from credits")
     return df
+
+
+def convert_dtypes(df: DataFrame) -> DataFrame:
+    """
+    Cast budget/id/popularity to numeric types and release_date to a
+    proper date type.
+
+    Spark already inferred numeric types when reading the JSON (see
+    printSchema() earlier), but casting explicitly here is still
+    worth doing: it's cheap insurance if a future API response ever
+    returns a numeric field as a string, and .cast() mirrors
+    pd.to_numeric(..., errors="coerce") directly - a value that
+    can't be cast becomes null instead of crashing the pipeline.
+    """
+    df = df.withColumn("budget", F.col("budget").cast("double"))
+    df = df.withColumn("id", F.col("id").cast("long"))
+    df = df.withColumn("popularity", F.col("popularity").cast("double"))
+    df = df.withColumn("release_date", F.to_date(F.col("release_date"), "yyyy-MM-dd"))
+    logger.info("Converted dtypes for budget, id, popularity, release_date")
+    return df
+
+
+def fix_unrealistic_values(df: DataFrame) -> DataFrame:
+    """
+    Replace 0 with null for budget/revenue/runtime (0 means unknown,
+    not free/instant), convert budget/revenue to million-USD columns,
+    and set vote_average to null wherever vote_count is 0 (a rating
+    with zero votes behind it isn't meaningful).
+    """
+    for col_name in ["budget", "revenue", "runtime"]:
+        df = df.withColumn(
+            col_name,
+            F.when(F.col(col_name) == 0, None).otherwise(F.col(col_name)),
+        )
+
+    df = df.withColumn("budget_musd", F.col("budget") / 1_000_000)
+    df = df.withColumn("revenue_musd", F.col("revenue") / 1_000_000)
+
+    zero_vote_count = df.filter(F.col("vote_count") == 0).count()
+    df = df.withColumn(
+        "vote_average",
+        F.when(F.col("vote_count") == 0, None).otherwise(F.col("vote_average")),
+    )
+    logger.info("Set vote_average to NaN for %d rows with vote_count == 0", zero_vote_count)
+
+    for col_name in ["overview", "tagline"]:
+        df = df.withColumn(
+            col_name,
+            F.when(F.col(col_name) == "No Data", None).otherwise(F.col(col_name)),
+        )
+
+    return df
