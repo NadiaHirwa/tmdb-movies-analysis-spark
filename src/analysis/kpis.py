@@ -78,3 +78,55 @@ def search_movies(
         df = df.orderBy(order_col)
 
     return df
+
+
+def add_franchise_status(df: DataFrame) -> DataFrame:
+    """Add a readable 'franchise_status' column: 'Franchise' or 'Standalone'."""
+    return df.withColumn(
+        "franchise_status",
+        F.when(F.col("belongs_to_collection").isNotNull(), "Franchise").otherwise("Standalone"),
+    )
+
+
+def compare_franchise_vs_standalone(df: DataFrame) -> DataFrame:
+    """
+    Compare franchise vs. standalone movies across mean revenue,
+    median ROI, mean budget, mean popularity, and mean rating.
+    """
+    return df.groupBy("franchise_status").agg(
+        F.mean("revenue_musd").alias("mean_revenue"),
+        F.expr("percentile_approx(roi, 0.5)").alias("median_roi"),
+        F.mean("budget_musd").alias("mean_budget"),
+        F.mean("popularity").alias("mean_popularity"),
+        F.mean("vote_average").alias("mean_rating"),
+    )
+
+
+def franchise_success(df: DataFrame) -> DataFrame:
+    """
+    Summarize each franchise (belongs_to_collection group) by movie
+    count, total/mean budget, total/mean revenue, and mean rating,
+    ranked by total revenue.
+    """
+    summary = df.groupBy("belongs_to_collection").agg(
+        F.count("id").alias("num_movies"),
+        F.sum("budget_musd").alias("total_budget"),
+        F.mean("budget_musd").alias("mean_budget"),
+        F.sum("revenue_musd").alias("total_revenue"),
+        F.mean("revenue_musd").alias("mean_revenue"),
+        F.mean("vote_average").alias("mean_rating"),
+    )
+    return summary.orderBy(F.desc("total_revenue"))
+
+
+def director_success(df: DataFrame) -> DataFrame:
+    """
+    Summarize each director by movie count, total revenue, and mean
+    rating, ranked by total revenue.
+    """
+    summary = df.groupBy("director").agg(
+        F.count("id").alias("num_movies"),
+        F.sum("revenue_musd").alias("total_revenue"),
+        F.mean("vote_average").alias("mean_rating"),
+    )
+    return summary.orderBy(F.desc("total_revenue"))
