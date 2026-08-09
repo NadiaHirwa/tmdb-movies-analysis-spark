@@ -28,11 +28,9 @@ BASE_URL = "https://api.themoviedb.org/3/movie"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 RAW_DATA_PATH = PROJECT_ROOT / "data" / "raw" / "movies_raw.json"
 
-MOVIE_IDS = [
-    0, 299534, 19995, 140607, 299536, 597, 135397,
-    420818, 24428, 168259, 99861, 284054, 12445,
-    181808, 330457, 351286, 109445, 321612, 260513,
-]
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+from monitoring.logging_config import get_logger
+from utils.constants import MOVIE_IDS
 
 
 def fetch_movie(movie_id: int, retries: int = 3, backoff: float = 1.0, timeout: int = 10) -> dict | None:
