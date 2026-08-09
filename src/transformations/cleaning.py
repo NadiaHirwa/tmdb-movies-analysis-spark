@@ -18,10 +18,18 @@ logger = get_logger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 RAW_DATA_PATH = PROJECT_ROOT / "data" / "raw" / "movies_raw.json"
+PROCESSED_DATA_PATH = PROJECT_ROOT / "data" / "processed" / "movies_clean.parquet"
 
 IRRELEVANT_COLUMNS = ["adult", "imdb_id", "original_title", "video", "homepage"]
 
 LIST_COLUMNS = ["genres", "production_companies", "production_countries", "spoken_languages"]
+
+FINAL_COLUMNS = [
+    "id", "title", "tagline", "release_date", "genres", "belongs_to_collection",
+    "original_language", "budget_musd", "revenue_musd", "production_companies",
+    "production_countries", "vote_count", "vote_average", "popularity", "runtime",
+    "overview", "spoken_languages", "poster_path", "cast", "cast_size", "director", "crew_size",
+]
 
 
 def load_raw_json(spark: SparkSession, path: str = str(RAW_DATA_PATH)) -> DataFrame:
@@ -210,3 +218,50 @@ def filter_sparse_rows(df: DataFrame, min_non_null: int = 10) -> DataFrame:
     after = df.count()
     logger.info("Dropped %d sparse rows (fewer than %d non-null columns)", before - after, min_non_null)
     return df
+
+
+def filter_released(df: DataFrame) -> DataFrame:
+    """Keep only 'Released' movies, then drop the now-redundant status column."""
+    before = df.count()
+    df = df.filter(F.col("status") == "Released")
+    df = df.drop("status")
+    logger.info("Dropped %d non-Released rows", before - df.count())
+    return df
+
+
+def reorder_and_reset(df: DataFrame) -> DataFrame:
+    """Reorder columns to the brief's exact spec."""
+    df = df.select(*FINAL_COLUMNS)
+    return df
+
+
+def clean_dataframe(df: DataFrame) -> DataFrame:
+    """Run the full cleaning pipeline, in order, on a raw movies DataFrame."""
+    df = drop_irrelevant_columns(df)
+    df = extract_collection_name(df)
+    df = extract_list_columns(df)
+    df = extract_credits_columns(df)
+    df = convert_dtypes(df)
+    df = fix_unrealistic_values(df)
+    df = remove_bad_rows(df)
+    df = filter_sparse_rows(df)
+    df = filter_released(df)
+    df = reorder_and_reset(df)
+    return df
+
+
+def save_clean_data(df: DataFrame, path: str = str(PROCESSED_DATA_PATH)) -> None:
+    """
+    Save the cleaned DataFrame as Parquet, creating the destination
+    directory if needed. See docs/adr/007-parquet-over-csv-for-spark-output.md
+    for why this differs from the pandas version's CSV output.
+    """
+    df.write.mode("overwrite").parquet(path)
+    logger.info("Saved cleaned data to %s", path)
+
+
+def run(spark: SparkSession) -> None:
+    """Run the full cleaning step: load raw data, clean it, save the result."""
+    df = load_raw_json(spark)
+    df = clean_dataframe(df)
+    save_clean_data(df)
