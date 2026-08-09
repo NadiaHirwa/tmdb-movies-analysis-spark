@@ -1,5 +1,7 @@
 # TMDB Movie Data Analysis (Spark)
 
+![Tests](https://github.com/NadiaHirwa/tmdb-movies-analysis-spark/actions/workflows/tests.yml/badge.svg)
+
 A data engineering pipeline that fetches movie data from the TMDb API, cleans and transforms it with PySpark, calculates business KPIs, and visualizes key trends. This is a PySpark rewrite of an [earlier pandas-based version](https://github.com/NadiaHirwa/tmdb-movies-analysis) of the same project, built as part of a Data Engineering apprenticeship to practice distributed DataFrame processing.
 
 ## Deliverables
