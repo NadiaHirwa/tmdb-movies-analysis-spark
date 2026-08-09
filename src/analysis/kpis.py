@@ -46,3 +46,35 @@ def rank_movies(
 
     order_col = F.col(by).asc() if ascending else F.col(by).desc()
     return data.orderBy(order_col).limit(n)
+
+
+def search_movies(
+    df: DataFrame,
+    genre_contains: str | list[str] | None = None,
+    cast_contains: str | None = None,
+    director_contains: str | None = None,
+    sort_by: str | None = None,
+    ascending: bool = True,
+) -> DataFrame:
+    """
+    Filter movies by any combination of genre, cast member, and/or
+    director substring matches, optionally sorted afterward.
+    """
+    if genre_contains is not None:
+        genres_needed = [genre_contains] if isinstance(genre_contains, str) else genre_contains
+        for genre in genres_needed:
+            df = df.filter(F.col("genres").contains(genre))
+
+    if cast_contains is not None:
+        df = df.filter(F.col("cast").contains(cast_contains))
+
+    if director_contains is not None:
+        df = df.filter(F.col("director").contains(director_contains))
+
+    logger.info("search_movies matched %d rows", df.count())
+
+    if sort_by is not None:
+        order_col = F.col(sort_by).asc() if ascending else F.col(sort_by).desc()
+        df = df.orderBy(order_col)
+
+    return df
