@@ -96,10 +96,6 @@ def extract_cast_column(df: DataFrame, sep: str = "|") -> DataFrame:
     Extract cast names from credits.cast, ordered by TMDb's billing
     order (order=0 is top-billed) - deliberately NOT alphabetically
     sorted, since billing order carries real meaning.
-
-    Sorts a temporary array<struct<order, name>> (Spark sorts structs
-    by their first field by default), then discards the order field,
-    keeping just the ordered names.
     """
     cast_sorted = F.array_sort(
         F.transform(
@@ -107,7 +103,11 @@ def extract_cast_column(df: DataFrame, sep: str = "|") -> DataFrame:
             lambda x: F.struct(x["order"].alias("order"), x["name"].alias("name")),
         )
     )
-    df = df.withColumn("cast", F.concat_ws(sep, F.transform(cast_sorted, lambda x: x["name"])))
+    cast_names = F.transform(cast_sorted, lambda x: x["name"])
+    df = df.withColumn(
+        "cast",
+        F.when(F.size(cast_names) > 0, F.concat_ws(sep, cast_names)).otherwise(F.lit(None)),
+    )
     df = df.withColumn("cast_size", F.size(F.col("credits.cast")))
     return df
 
@@ -116,7 +116,10 @@ def extract_director_column(df: DataFrame, sep: str = "|") -> DataFrame:
     """Search credits.crew for anyone with job == 'Director'."""
     directors = F.filter(F.col("credits.crew"), lambda x: x["job"] == "Director")
     director_names = F.array_sort(F.transform(directors, lambda x: x["name"]))
-    df = df.withColumn("director", F.concat_ws(sep, director_names))
+    df = df.withColumn(
+        "director",
+        F.when(F.size(directors) > 0, F.concat_ws(sep, director_names)).otherwise(F.lit(None)),
+    )
     df = df.withColumn("crew_size", F.size(F.col("credits.crew")))
     return df
 
