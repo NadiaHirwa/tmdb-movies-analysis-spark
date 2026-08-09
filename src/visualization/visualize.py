@@ -105,6 +105,7 @@ def plot_popularity_vs_rating(df: pd.DataFrame, show: bool = True) -> Path:
 def plot_yearly_trends(df: pd.DataFrame, show: bool = True) -> Path:
     """Line chart of total revenue per release year."""
     df = df.copy()
+    df["release_date"] = pd.to_datetime(df["release_date"])
     df["year"] = df["release_date"].dt.year
     yearly_revenue = df.groupby("year")["revenue_musd"].sum()
 
