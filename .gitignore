@@ -13,3 +13,6 @@ logs/
 metastore_db/
 derby.log
 spark-warehouse/
+anaconda_projects/
+
+scratch_testing.ipynb
