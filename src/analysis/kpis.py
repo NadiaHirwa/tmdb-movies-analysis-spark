@@ -40,12 +40,17 @@ def rank_movies(
     """
     Return the top (or bottom) `n` movies ranked by a given column,
     with an optional minimum-value filter applied first.
+
+    The requested metric remains the primary sort key; when several records tie,
+    movie id provides a deterministic secondary order so Spark does not depend on
+    incidental input order.
     """
     if filter_column is not None:
         data = data.filter(F.col(filter_column) >= min_value)
 
-    order_col = F.col(by).asc() if ascending else F.col(by).desc()
-    return data.orderBy(order_col).limit(n)
+    primary_order = F.col(by).asc() if ascending else F.col(by).desc()
+    secondary_order = F.col("id").asc()
+    return data.orderBy(primary_order, secondary_order).limit(n)
 
 
 def search_movies(
@@ -59,17 +64,23 @@ def search_movies(
     """
     Filter movies by any combination of genre, cast member, and/or
     director substring matches, optionally sorted afterward.
+
+    Matching is case-insensitive and uses native Spark expressions only.
+    Multiple requested genres are combined with AND semantics.
     """
     if genre_contains is not None:
         genres_needed = [genre_contains] if isinstance(genre_contains, str) else genre_contains
         for genre in genres_needed:
-            df = df.filter(F.col("genres").contains(genre))
+            normalized_genre = F.lower(F.col("genres").cast("string"))
+            df = df.filter(normalized_genre.contains(F.lower(F.lit(genre))))
 
     if cast_contains is not None:
-        df = df.filter(F.col("cast").contains(cast_contains))
+        normalized_cast = F.lower(F.col("cast").cast("string"))
+        df = df.filter(normalized_cast.contains(F.lower(F.lit(cast_contains))))
 
     if director_contains is not None:
-        df = df.filter(F.col("director").contains(director_contains))
+        normalized_director = F.lower(F.col("director").cast("string"))
+        df = df.filter(normalized_director.contains(F.lower(F.lit(director_contains))))
 
     logger.info("search_movies matched %d rows", df.count())
 

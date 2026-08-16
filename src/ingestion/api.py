@@ -22,6 +22,8 @@ logger = get_logger(__name__)
 
 load_dotenv()
 
+REQUIRED_FIELDS = {"id", "title", "release_date", "genres", "credits", "budget", "revenue"}
+
 API_KEY = os.getenv("TMDB_API_KEY")
 BASE_URL = "https://api.themoviedb.org/3/movie"
 
@@ -33,7 +35,34 @@ from monitoring.logging_config import get_logger
 from utils.constants import MOVIE_IDS
 
 
-def fetch_movie(movie_id: int, retries: int = 3, backoff: float = 1.0, timeout: int = 10) -> dict | None:
+def _validate_movie_contract(movie: dict | None) -> bool:
+    """Reject malformed TMDb payloads before they reach the pipeline."""
+    if not isinstance(movie, dict):
+        return False
+
+    missing_fields = [
+        field for field in sorted(REQUIRED_FIELDS)
+        if field not in movie or movie.get(field) in (None, "", [], {})
+    ]
+
+    if missing_fields:
+        logger.warning(
+            "Rejected malformed movie payload for id=%s. Missing required fields: %s",
+            movie.get("id"),
+            ", ".join(missing_fields),
+        )
+        return False
+
+    return True
+
+
+def fetch_movie(
+    movie_id: int,
+    retries: int = 3,
+    backoff: float = 1.0,
+    timeout: int = 10,
+    session: requests.Session | None = None,
+) -> dict | None:
     """
     Fetch a single movie's details, with cast/crew credits appended,
     from the TMDb API.
@@ -56,6 +85,8 @@ def fetch_movie(movie_id: int, retries: int = 3, backoff: float = 1.0, timeout: 
         Base delay in seconds between retries; scales with attempt number.
     timeout : int
         Seconds to wait for a response before treating the request as failed.
+    session : requests.Session | None
+        Optional shared session for connection reuse across many requests.
 
     Returns
     -------
@@ -65,18 +96,25 @@ def fetch_movie(movie_id: int, retries: int = 3, backoff: float = 1.0, timeout: 
     """
     url = f"{BASE_URL}/{movie_id}"
     params = {"api_key": API_KEY, "append_to_response": "credits"}
+    http = session or requests
 
     for attempt in range(1, retries + 1):
         try:
-            response = requests.get(url, params=params, timeout=timeout)
+            response = http.get(url, params=params, timeout=timeout)
 
             if response.status_code == 404:
                 logger.warning("movie_id=%s not found (404 from API). Skipping.", movie_id)
                 return None
 
             response.raise_for_status()
+            movie = response.json()
+
+            if not _validate_movie_contract(movie):
+                logger.warning("movie_id=%s rejected because it failed the API contract check.", movie_id)
+                return None
+
             logger.info("Fetched movie_id=%s (attempt %d).", movie_id, attempt)
-            return response.json()
+            return movie
 
         except requests.exceptions.Timeout:
             logger.warning("Timeout fetching movie_id=%s on attempt %d.", movie_id, attempt)
@@ -98,24 +136,38 @@ def fetch_all_movies(movie_ids: list[int]) -> list[dict]:
     """
     Fetch data for a list of movie IDs, skipping any that fail.
 
-    Parameters
-    ----------
-    movie_ids : list[int]
-        TMDb movie IDs to fetch.
-
-    Returns
-    -------
-    list[dict]
-        JSON records for all movies that were fetched successfully.
+    If every requested ID is rejected or fails, raise a clear error so the
+    pipeline stops before saving an empty raw JSON file.
     """
-    movies = []
-    for movie_id in movie_ids:
-        data = fetch_movie(movie_id)
-        if data is not None:
-            movies.append(data)
+    # Reusing a single Session is a lightweight optimization: it keeps TCP
+    # connections alive so the client can reuse sockets across requests.
+    # That matters much more once the number of API calls scales beyond this
+    # small assignment, where the per-request overhead becomes noticeable.
+    with requests.Session() as session:
+        movies = []
+        invalid_ids = []
 
-    logger.info("Collected %d/%d movies successfully.", len(movies), len(movie_ids))
-    return movies
+        for movie_id in movie_ids:
+            data = fetch_movie(movie_id, session=session)
+            if data is not None:
+                movies.append(data)
+            else:
+                invalid_ids.append(movie_id)
+
+        if not movies:
+            raise ValueError(
+                "Zero usable movie records were fetched from TMDb. "
+                f"Requested {len(movie_ids)} IDs, all were invalid or unusable."
+            )
+
+        if invalid_ids:
+            logger.warning(
+                "Some movie IDs were invalid or rejected and were skipped: %s",
+                invalid_ids,
+            )
+
+        logger.info("Collected %d/%d movies successfully.", len(movies), len(movie_ids))
+        return movies
 
 
 def save_raw_data(movies: list[dict], path: Path = RAW_DATA_PATH) -> None:
