@@ -238,6 +238,47 @@ def reorder_and_reset(df: DataFrame) -> DataFrame:
     return df
 
 
+def validate_cleaned_dataframe(df: DataFrame) -> None:
+    """Validate the final cleaned DataFrame against the pipeline contract."""
+    if df.columns != FINAL_COLUMNS:
+        message = (
+            "Cleaned DataFrame column contract mismatch: "
+            f"expected {FINAL_COLUMNS}, got {df.columns}"
+        )
+        logger.error(message)
+        raise ValueError(message)
+
+    checks = [
+        ("id", lambda c: c.isNull(), "id is required and non-null"),
+        ("title", lambda c: c.isNull(), "title is required and non-null"),
+        ("vote_count", lambda c: c < 0, "vote_count must be non-negative when present"),
+        (
+            "vote_average",
+            lambda c: (c < 0) | (c > 10),
+            "vote_average must be between 0 and 10 when present",
+        ),
+        ("budget_musd", lambda c: c < 0, "budget_musd must be non-negative when present"),
+        ("revenue_musd", lambda c: c < 0, "revenue_musd must be non-negative when present"),
+        ("runtime", lambda c: c < 0, "runtime must be non-negative when present"),
+    ]
+
+    for col_name, predicate, message in checks:
+        if col_name not in df.columns:
+            continue
+
+        invalid_count = df.filter(predicate(F.col(col_name))).limit(1).count()
+        if invalid_count > 0:
+            logger.error("Validation failed for %s on %d row(s)", col_name, invalid_count)
+            raise ValueError(message)
+
+    duplicate_ids = df.groupBy("id").count().filter(F.col("count") > 1).limit(1).count()
+    if duplicate_ids > 0:
+        logger.error("Validation failed: duplicate movie ids found in cleaned data")
+        raise ValueError("Duplicate ids found in cleaned DataFrame")
+
+    logger.info("Validated cleaned DataFrame contract for %d rows", df.count())
+
+
 def clean_dataframe(df: DataFrame) -> DataFrame:
     """Run the full cleaning pipeline, in order, on a raw movies DataFrame."""
     df = drop_irrelevant_columns(df)
@@ -259,6 +300,7 @@ def save_clean_data(df: DataFrame, path: str = str(PROCESSED_DATA_PATH)) -> None
     directory if needed. See docs/adr/007-parquet-over-csv-for-spark-output.md
     for why this differs from the pandas version's CSV output.
     """
+    validate_cleaned_dataframe(df)
     df.write.mode("overwrite").parquet(path)
     logger.info("Saved cleaned data to %s", path)
 

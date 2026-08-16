@@ -118,8 +118,18 @@ def franchise_success(df: DataFrame) -> DataFrame:
     Summarize each franchise (belongs_to_collection group) by movie
     count, total/mean budget, total/mean revenue, and mean rating,
     ranked by total revenue.
+
+    Only movies that actually belong to a collection count as a franchise.
+    Rows with a null or blank belongs_to_collection are standalone titles;
+    grouping them would report every standalone movie as one unnamed franchise.
+    They are compared against franchises in compare_franchise_vs_standalone().
     """
-    summary = df.groupBy("belongs_to_collection").agg(
+    collections_only = df.filter(
+        F.col("belongs_to_collection").isNotNull()
+        & (F.length(F.trim(F.col("belongs_to_collection"))) > 0)
+    )
+
+    summary = collections_only.groupBy("belongs_to_collection").agg(
         F.count("id").alias("num_movies"),
         F.sum("budget_musd").alias("total_budget"),
         F.mean("budget_musd").alias("mean_budget"),
@@ -134,8 +144,27 @@ def director_success(df: DataFrame) -> DataFrame:
     """
     Summarize each director by movie count, total revenue, and mean
     rating, ranked by total revenue.
+
+    Co-directed films are split into individual director rows so each director
+    receives a full credit for the film without using a Python UDF.
     """
-    summary = df.groupBy("director").agg(
+    exploded = (
+        df.select(
+            "id",
+            "revenue_musd",
+            "vote_average",
+            F.explode(
+                F.split(
+                    F.regexp_replace(F.trim(F.col("director")), r"\s*\|\s*", "|"),
+                    "\\|",
+                )
+            ).alias("director"),
+        )
+        .withColumn("director", F.trim(F.col("director")))
+        .filter(F.col("director").isNotNull() & (F.length(F.col("director")) > 0))
+    )
+
+    summary = exploded.groupBy("director").agg(
         F.count("id").alias("num_movies"),
         F.sum("revenue_musd").alias("total_revenue"),
         F.mean("vote_average").alias("mean_rating"),

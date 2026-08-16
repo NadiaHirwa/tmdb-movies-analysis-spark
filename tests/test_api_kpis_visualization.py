@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
@@ -6,7 +8,10 @@ from pyspark.sql import Row, SparkSession
 
 from analysis import kpis
 from ingestion import api as api_module
+from transformations.cleaning import RAW_DATA_PATH, clean_dataframe, load_raw_json
 from visualization import visualize
+
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
 
 @pytest.fixture(scope="module")
@@ -156,10 +161,10 @@ def test_add_financial_columns_handles_null_budget_and_calculates_metrics(spark)
 def test_rank_movies_filters_by_min_budget_and_min_votes(spark):
     df = spark.createDataFrame(
         [
-            Row(title="Low Budget", budget_musd=10.0, revenue_musd=5.0, vote_count=100, vote_average=7.5),
-            Row(title="Mid Budget", budget_musd=100.0, revenue_musd=500.0, vote_count=5, vote_average=8.5),
-            Row(title="High Budget", budget_musd=200.0, revenue_musd=1000.0, vote_count=50, vote_average=9.0),
-            Row(title="Low Votes", budget_musd=300.0, revenue_musd=2000.0, vote_count=2, vote_average=8.0),
+            Row(id=299534, title="Low Budget", budget_musd=10.0, revenue_musd=5.0, vote_count=100, vote_average=7.5),
+            Row(id=19995, title="Mid Budget", budget_musd=100.0, revenue_musd=500.0, vote_count=5, vote_average=8.5),
+            Row(id=140607, title="High Budget", budget_musd=200.0, revenue_musd=1000.0, vote_count=50, vote_average=9.0),
+            Row(id=299536, title="Low Votes", budget_musd=300.0, revenue_musd=2000.0, vote_count=2, vote_average=8.0),
         ]
     )
 
@@ -228,10 +233,10 @@ def test_search_movies_returns_zero_results_for_required_queries(spark):
 def test_franchise_and_director_aggregations_match_expected_summary_rows(spark):
     df = spark.createDataFrame(
         [
-            Row(title="Franchise A 1", belongs_to_collection="Franchise A", director="Director B", revenue_musd=100.0, budget_musd=50.0, popularity=10.0, vote_average=8.0),
-            Row(title="Franchise A 2", belongs_to_collection="Franchise A", director="Director B", revenue_musd=50.0, budget_musd=25.0, popularity=4.0, vote_average=6.0),
-            Row(title="Standalone 1", belongs_to_collection=None, director="Director C", revenue_musd=80.0, budget_musd=20.0, popularity=9.0, vote_average=9.0),
-            Row(title="Standalone 2", belongs_to_collection=None, director="Director C", revenue_musd=40.0, budget_musd=10.0, popularity=3.0, vote_average=5.0),
+            Row(id=24428, title="Franchise A 1", belongs_to_collection="Franchise A", director="Director B", revenue_musd=100.0, budget_musd=50.0, popularity=10.0, vote_average=8.0),
+            Row(id=99861, title="Franchise A 2", belongs_to_collection="Franchise A", director="Director B", revenue_musd=50.0, budget_musd=25.0, popularity=4.0, vote_average=6.0),
+            Row(id=597, title="Standalone 1", belongs_to_collection=None, director="Director C", revenue_musd=80.0, budget_musd=20.0, popularity=9.0, vote_average=9.0),
+            Row(id=284054, title="Standalone 2", belongs_to_collection=None, director="Director C", revenue_musd=40.0, budget_musd=10.0, popularity=3.0, vote_average=5.0),
         ]
     )
 
@@ -252,9 +257,59 @@ def test_franchise_and_director_aggregations_match_expected_summary_rows(spark):
     assert comparison_rows["Standalone"]["mean_budget"] == pytest.approx(15.0)
     assert comparison_rows["Standalone"]["median_roi"] == pytest.approx(4.0)
 
-    assert [row["belongs_to_collection"] for row in franchise_summary.collect()] == ["Franchise A"]
+    # Standalone titles stay in compare_franchise_vs_standalone() above; they must
+    # not leak into the franchise leaderboard as an unnamed null "collection".
+    franchise_collections = [row["belongs_to_collection"] for row in franchise_summary.collect()]
+    assert franchise_collections == ["Franchise A"]
+    assert None not in franchise_collections
+
     assert [row["director"] for row in director_summary.collect()] == ["Director B", "Director C"]
     assert director_summary.collect()[0]["total_revenue"] == pytest.approx(150.0)
+
+
+def test_franchise_success_excludes_standalone_and_blank_collections(spark):
+    """Only real collections are franchises - null, empty, and whitespace are not."""
+    df = spark.createDataFrame(
+        [
+            Row(id=299534, title="Collection Movie 1", belongs_to_collection="The Avengers Collection", revenue_musd=100.0, budget_musd=50.0, vote_average=8.0),
+            Row(id=299536, title="Collection Movie 2", belongs_to_collection="The Avengers Collection", revenue_musd=200.0, budget_musd=60.0, vote_average=7.0),
+            Row(id=597, title="Null Collection", belongs_to_collection=None, revenue_musd=900.0, budget_musd=200.0, vote_average=7.9),
+            Row(id=19995, title="Empty Collection", belongs_to_collection="", revenue_musd=800.0, budget_musd=237.0, vote_average=7.6),
+            Row(id=140607, title="Whitespace Collection", belongs_to_collection="   ", revenue_musd=700.0, budget_musd=245.0, vote_average=7.3),
+        ]
+    )
+
+    summary = kpis.franchise_success(df).collect()
+    collections = [row["belongs_to_collection"] for row in summary]
+
+    # The standalone rows carry the three highest revenues, so if they were still
+    # grouped they would top this leaderboard rather than merely appear in it.
+    assert collections == ["The Avengers Collection"]
+    assert summary[0]["num_movies"] == 2
+    assert summary[0]["total_revenue"] == pytest.approx(300.0)
+
+
+def test_director_success_split_co_directed_movies_into_individual_credit(spark):
+    df = spark.createDataFrame(
+        [
+            Row(id=1, title="Co-Directed Film", director="Anthony Russo|Joe Russo", revenue_musd=120.0, vote_average=8.5),
+            Row(id=2, title="Solo Film", director="Christopher Nolan", revenue_musd=80.0, vote_average=7.5),
+            Row(id=3, title="Missing Director", director=None, revenue_musd=30.0, vote_average=6.0),
+            Row(id=4, title="Empty Director", director="", revenue_musd=10.0, vote_average=5.5),
+            Row(id=5, title="Whitespace Director", director="   Anthony Russo   |   Joe Russo   ", revenue_musd=50.0, vote_average=7.0),
+        ]
+    )
+
+    director_summary = kpis.director_success(df)
+    rows = {row["director"]: row for row in director_summary.collect()}
+
+    assert rows["Anthony Russo"]["num_movies"] == 2
+    assert rows["Anthony Russo"]["total_revenue"] == pytest.approx(170.0)
+    assert rows["Joe Russo"]["num_movies"] == 2
+    assert rows["Joe Russo"]["total_revenue"] == pytest.approx(170.0)
+    assert rows["Christopher Nolan"]["num_movies"] == 1
+    assert rows["Christopher Nolan"]["total_revenue"] == pytest.approx(80.0)
+    assert set(rows) == {"Anthony Russo", "Joe Russo", "Christopher Nolan"}
 
 
 def test_visualization_chart_functions_create_output_files(tmp_path, monkeypatch):
@@ -308,3 +363,75 @@ def test_visualization_chart_functions_create_output_files(tmp_path, monkeypatch
     assert len(paths) == 5
     assert all(path.exists() for path in paths)
     assert all(path.suffix == ".png" for path in paths)
+
+
+@pytest.mark.skipif(
+    not RAW_DATA_PATH.exists(),
+    reason=(
+        f"Frozen raw input not present at {RAW_DATA_PATH}. "
+        "data/raw/ is gitignored, so this baseline runs only where the locked "
+        "TMDb pull has been fetched (see README ingestion step)."
+    ),
+)
+def test_frozen_spark_baseline_outputs_regression(spark):
+    """
+    Regression-check the current Spark pipeline against a frozen Spark baseline.
+
+    Classification: this is a Spark frozen-output regression test, NOT a
+    Pandas-to-Spark parity test. Every expected value in
+    tests/fixtures/frozen_dataset_spark_outputs.json was captured from an
+    earlier run of THIS Spark pipeline over the locked 18-movie raw JSON pull.
+    The fixture therefore proves the results have not drifted; it does not
+    independently prove they are correct. Independent cross-engine validation
+    belongs to the separate Pandas-vs-Spark parity test still to be added.
+
+    Only deterministic cleaning and KPI outputs are compared - no live TMDb API
+    calls, and no volatile fields such as popularity or vote_count.
+    """
+    fixture_path = FIXTURES_DIR / "frozen_dataset_spark_outputs.json"
+    expected = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    df = clean_dataframe(load_raw_json(spark))
+    df = kpis.add_financial_columns(df)
+    df = kpis.add_franchise_status(df)
+
+    # profit_musd and roi are read back from add_financial_columns rather than
+    # recomputed here, so the frozen values guard the pipeline's own arithmetic.
+    top_revenue = (
+        df.orderBy(df.revenue_musd.desc())
+        .select("title", "revenue_musd", "budget_musd")
+        .limit(5)
+        .toPandas()
+        .to_dict("records")
+    )
+    top_profit = (
+        df.orderBy("profit_musd", ascending=False)
+        .select("title", "profit_musd", "budget_musd", "revenue_musd")
+        .limit(5)
+        .toPandas()
+        .to_dict("records")
+    )
+    top_roi = (
+        df.filter(df.budget_musd >= 10)
+        .orderBy("roi", ascending=False)
+        .select("title", "roi", "budget_musd", "revenue_musd")
+        .limit(5)
+        .toPandas()
+        .to_dict("records")
+    )
+    franchise_summary = kpis.franchise_success(df).orderBy("total_revenue", ascending=False).limit(3).toPandas().to_dict("records")
+    director_summary = kpis.director_success(df).orderBy("total_revenue", ascending=False).limit(3).toPandas().to_dict("records")
+
+    assert top_revenue == expected["top_revenue"], "Top revenue mismatch"
+    assert top_profit == expected["top_profit"], "Top profit mismatch"
+    assert top_roi == expected["top_roi_10m"], "Top ROI (10M budget filter) mismatch"
+
+    # franchise_top_3 was re-frozen after franchise_success() stopped grouping
+    # standalone movies into one unnamed null "collection". The null group that
+    # used to rank 2nd is gone, so these three rows are all real collections.
+    assert franchise_summary == expected["franchise_top_3"], "Top 3 franchises mismatch"
+    assert all(row["belongs_to_collection"] for row in franchise_summary), "Null/blank collection leaked into franchise results"
+
+    # Anthony Russo and Joe Russo tie exactly on total_revenue, so compare by
+    # director name instead of depending on how Spark breaks that tie.
+    assert sorted(director_summary, key=lambda row: row["director"]) == sorted(expected["director_top_3"], key=lambda row: row["director"]), "Top directors mismatch"
