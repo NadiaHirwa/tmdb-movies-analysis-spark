@@ -108,7 +108,9 @@ Aggregations use `groupBy().agg()` with Spark's aggregate functions, with two de
 - **Visualization smoke tests** - all 5 chart functions run end to end against a temp directory and are asserted to write real PNG files.
 - **Frozen-output regression** - `test_frozen_spark_baseline_outputs_regression` replays the deterministic cleaning and KPI path over the locked 18-movie raw pull and compares it to `tests/fixtures/frozen_dataset_spark_outputs.json`.
 
-That fixture is a **Spark regression baseline, not a Pandas-to-Spark parity check**: every expected value was captured from an earlier run of this same Spark pipeline. It proves results have not drifted; it does not independently prove they are correct. Volatile fields (`popularity`, `vote_count`) are excluded so the baseline stays stable. A genuine cross-engine parity test, built from independently validated pandas outputs, is a separate piece of work not yet in this repo.
+That fixture is a **Spark regression baseline, not a Pandas-to-Spark parity check**: every expected value was captured from an earlier run of this same Spark pipeline. It proves results have not drifted; it does not independently prove they are correct. A genuine cross-engine parity test, built from independently validated pandas outputs, is a separate piece of work not yet in this repo.
+
+The baseline deliberately holds only fields that cannot move on their own. Vote-derived values are all excluded - `popularity` and `vote_count` directly, and `mean_rating` because it averages `vote_average`, which real TMDb users keep changing. Freezing a rating aggregate made the test fail on every refreshed pull, reporting drift in the source data as though it were a regression in the pipeline. What remains - titles, counts, budgets, revenues, profit and ROI - survived a live re-fetch unchanged.
 
 Because `data/raw/` is gitignored, that one regression test depends on the raw pull existing locally and skips with an explanatory message where it doesn't - including CI, which therefore runs the other 32. Current verified local result with the raw data present: **33 passed**.
 

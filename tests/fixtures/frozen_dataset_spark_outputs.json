@@ -97,8 +97,7 @@
       "total_budget": 1111.0,
       "mean_budget": 277.75,
       "total_revenue": 7776.073348,
-      "mean_revenue": 1944.018337,
-      "mean_rating": 7.954750000000001
+      "mean_revenue": 1944.018337
     },
     {
       "belongs_to_collection": "Star Wars Collection",
@@ -106,8 +105,7 @@
       "total_budget": 545.0,
       "mean_budget": 272.5,
       "total_revenue": 3402.63133,
-      "mean_revenue": 1701.315665,
-      "mean_rating": 6.995
+      "mean_revenue": 1701.315665
     },
     {
       "belongs_to_collection": "Jurassic Park Collection",
@@ -115,28 +113,24 @@
       "total_budget": 320.0,
       "mean_budget": 160.0,
       "total_revenue": 2982.0064810000003,
-      "mean_revenue": 1491.0032405000002,
-      "mean_rating": 6.6
+      "mean_revenue": 1491.0032405000002
     }
   ],
   "director_top_3": [
     {
       "director": "James Cameron",
       "num_movies": 2,
-      "total_revenue": 5187.868379,
-      "mean_rating": 7.75
+      "total_revenue": 5187.868379
     },
     {
       "director": "Joe Russo",
       "num_movies": 2,
-      "total_revenue": 4851.854139,
-      "mean_rating": 8.2395
+      "total_revenue": 4851.854139
     },
     {
       "director": "Anthony Russo",
       "num_movies": 2,
-      "total_revenue": 4851.854139,
-      "mean_rating": 8.2395
+      "total_revenue": 4851.854139
     }
   ]
 }

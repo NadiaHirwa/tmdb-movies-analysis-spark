@@ -386,7 +386,8 @@ def test_frozen_spark_baseline_outputs_regression(spark):
     belongs to the separate Pandas-vs-Spark parity test still to be added.
 
     Only deterministic cleaning and KPI outputs are compared - no live TMDb API
-    calls, and no volatile fields such as popularity or vote_count.
+    calls, and no vote-derived fields (popularity, vote_count, and any mean_rating
+    aggregate of vote_average), all of which move as real users keep voting.
     """
     fixture_path = FIXTURES_DIR / "frozen_dataset_spark_outputs.json"
     expected = json.loads(fixture_path.read_text(encoding="utf-8"))
@@ -419,8 +420,26 @@ def test_frozen_spark_baseline_outputs_regression(spark):
         .toPandas()
         .to_dict("records")
     )
-    franchise_summary = kpis.franchise_success(df).orderBy("total_revenue", ascending=False).limit(3).toPandas().to_dict("records")
-    director_summary = kpis.director_success(df).orderBy("total_revenue", ascending=False).limit(3).toPandas().to_dict("records")
+    # mean_rating is dropped from both aggregate baselines. It averages
+    # vote_average, which real TMDb users keep moving, so freezing it made this
+    # test fail on any refreshed raw pull - drift in the source data, not a
+    # regression in the pipeline. Revenue, budget and counts do not move that way.
+    franchise_summary = (
+        kpis.franchise_success(df)
+        .orderBy("total_revenue", ascending=False)
+        .drop("mean_rating")
+        .limit(3)
+        .toPandas()
+        .to_dict("records")
+    )
+    director_summary = (
+        kpis.director_success(df)
+        .orderBy("total_revenue", ascending=False)
+        .drop("mean_rating")
+        .limit(3)
+        .toPandas()
+        .to_dict("records")
+    )
 
     assert top_revenue == expected["top_revenue"], "Top revenue mismatch"
     assert top_profit == expected["top_profit"], "Top profit mismatch"
